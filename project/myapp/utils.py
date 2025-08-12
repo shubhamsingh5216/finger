@@ -3,15 +3,18 @@ import numpy as np
 from skimage.morphology import skeletonize
 from skimage.filters import threshold_otsu
 
-
 def estimate_orientation(img):
-    # Compute gradients
+    # Calculate gradients
     sobelx = cv2.Sobel(img, cv2.CV_64F, 1, 0, ksize=3)
     sobely = cv2.Sobel(img, cv2.CV_64F, 0, 1, ksize=3)
     
-    # Calculate orientation angle (in degrees)
-    orientation = 0.5 * np.arctan2(2 * np.mean(sobelx * sobely), np.mean(sobelx**2 - sobely**2))
-    angle = orientation * (180 / np.pi)
+    # Calculate orientation angle (radians)
+    v_x = 2 * np.mean(sobelx * sobely)
+    v_y = np.mean(sobelx**2 - sobely**2)
+    orientation = 0.5 * np.arctan2(v_x, v_y)
+    
+    # Convert radians to degrees
+    angle = np.degrees(orientation)
     return angle
 
 def rotate_image(img, angle):
@@ -21,14 +24,14 @@ def rotate_image(img, angle):
     rotated = cv2.warpAffine(img, M, (w, h), flags=cv2.INTER_LINEAR)
     return rotated
 
-# In preprocess_fingerprint, after loading grayscale img:
-angle = estimate_orientation(img)
-img = rotate_image(img, -angle)  # Rotate to normalize orientation
-
 def preprocess_fingerprint(image_path):
     img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
     if img is None:
         return None
+
+    # Step 0: Align fingerprint by rotation correction
+    angle = estimate_orientation(img)
+    img = rotate_image(img, -angle)
 
     # 1. Enhance contrast with CLAHE
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
@@ -65,7 +68,7 @@ def preprocess_fingerprint(image_path):
     skeleton = (skeleton * 255).astype(np.uint8)
 
     return skeleton
-    
+
 def match_fingerprint(img1_path, img2_path):
     img1 = preprocess_fingerprint(img1_path)
     img2 = preprocess_fingerprint(img2_path)
@@ -84,7 +87,17 @@ def match_fingerprint(img1_path, img2_path):
     flann = cv2.FlannBasedMatcher(index_params, search_params)
 
     matches = flann.knnMatch(des1, des2, k=2)
-    good_matches = [m for m, n in matches if m.distance < 0.7 * n.distance]
 
-    match_percent = len(good_matches) / len(matches) if matches else 0
-    return match_percent
+    # Lowe's ratio test to filter good matches
+    good_matches = []
+    for m, n in matches:
+        if m.distance < 0.99 * n.distance:
+            good_matches.append(m)
+
+    min_keypoints = min(len(kp1), len(kp2))
+    if min_keypoints == 0:
+        return 0
+
+    match_percent = len(good_matches) / min_keypoints
+    return float(f"{match_percent:.15f}")
+
